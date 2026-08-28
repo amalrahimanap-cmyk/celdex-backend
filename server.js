@@ -11,22 +11,23 @@ const { Server } = require("socket.io");
 const app = express();
 const server = http.createServer(app);
 
-
-/* =========================
-   CORS
-========================= */
+/* =====================================================
+   CONFIG
+===================================================== */
 
 app.use(cors({
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
 }));
 
-app.use(express.json());
+app.use(express.json({
+    limit: "1mb"
+}));
 
-
-/* =========================
+/* =====================================================
    SOCKET.IO
-========================= */
+===================================================== */
 
 const io = new Server(server, {
     cors: {
@@ -35,26 +36,40 @@ const io = new Server(server, {
     }
 });
 
-
-/* =========================
+/* =====================================================
    DATABASE
-========================= */
+===================================================== */
 
-mongoose.connect(process.env.MONGODB_URI)
-    .then(() => {
-        console.log("✅ CELDEX MongoDB connected");
-    })
-    .catch(error => {
-        console.error(
-            "❌ MongoDB error:",
-            error
-        );
-    });
+if (!process.env.MONGODB_URI) {
 
+    console.error(
+        "❌ MONGODB_URI environment variable is missing"
+    );
 
-/* =========================
+} else {
+
+    mongoose.connect(process.env.MONGODB_URI)
+        .then(() => {
+
+            console.log(
+                "✅ CELDEX MongoDB connected"
+            );
+
+        })
+        .catch((error) => {
+
+            console.error(
+                "❌ MongoDB error:",
+                error
+            );
+
+        });
+
+}
+
+/* =====================================================
    USER SCHEMA
-========================= */
+===================================================== */
 
 const userSchema = new mongoose.Schema({
 
@@ -64,7 +79,8 @@ const userSchema = new mongoose.Schema({
         unique: true,
         minlength: 3,
         maxlength: 24,
-        trim: true
+        trim: true,
+        lowercase: true
     },
 
     password: {
@@ -92,16 +108,14 @@ const userSchema = new mongoose.Schema({
     timestamps: true
 });
 
-
 const User = mongoose.model(
     "User",
     userSchema
 );
 
-
-/* =========================
+/* =====================================================
    CHANNEL SCHEMA
-========================= */
+===================================================== */
 
 const channelSchema = new mongoose.Schema({
 
@@ -127,16 +141,14 @@ const channelSchema = new mongoose.Schema({
     timestamps: true
 });
 
-
 const Channel = mongoose.model(
     "Channel",
     channelSchema
 );
 
-
-/* =========================
+/* =====================================================
    MESSAGE SCHEMA
-========================= */
+===================================================== */
 
 const messageSchema = new mongoose.Schema({
 
@@ -168,28 +180,21 @@ const messageSchema = new mongoose.Schema({
     timestamps: true
 });
 
-
 const Message = mongoose.model(
     "Message",
     messageSchema
 );
 
+/* =====================================================
+   AUTH MIDDLEWARE
+===================================================== */
 
-/* =========================
-   AUTHENTICATION
-========================= */
-
-async function authenticate(
-    req,
-    res,
-    next
-) {
+async function authenticate(req, res, next) {
 
     try {
 
         const header =
             req.headers.authorization;
-
 
         if (
             !header ||
@@ -202,16 +207,21 @@ async function authenticate(
 
         }
 
-
         const token =
-            header.substring(7);
+            header.substring(7).trim();
 
+        if (!token) {
+
+            return res.status(401).json({
+                error: "Authentication token missing"
+            });
+
+        }
 
         const user =
             await User.findOne({
                 authToken: token
             });
-
 
         if (!user) {
 
@@ -221,11 +231,9 @@ async function authenticate(
 
         }
 
-
         req.user = user;
 
         next();
-
 
     } catch (error) {
 
@@ -234,8 +242,7 @@ async function authenticate(
             error
         );
 
-
-        res.status(500).json({
+        return res.status(500).json({
             error: "Authentication error"
         });
 
@@ -243,289 +250,295 @@ async function authenticate(
 
 }
 
-
-/* =========================
-   TEST
-========================= */
+/* =====================================================
+   TEST / HEALTH
+===================================================== */
 
 app.get("/", (req, res) => {
 
     res.json({
-
         name: "CELDEX",
-
         status: "online",
-
-        version: "1.0.0"
-
+        version: "1.1.0",
+        message: "CELDEX backend is working"
     });
 
 });
 
-
-/* =========================
+/* =====================================================
    REGISTER
-========================= */
+===================================================== */
 
-app.post(
-    "/api/register",
-    async (req, res) => {
+app.post("/api/register", async (req, res) => {
 
-        try {
+    try {
 
-            let {
-                username,
-                password
-            } = req.body;
+        let {
+            username,
+            password
+        } = req.body;
 
+        username =
+            username?.trim().toLowerCase();
 
-            username =
-                username?.trim();
+        if (!username || !password) {
 
-
-            if (
-                !username ||
-                !password
-            ) {
-
-                return res.status(400).json({
-                    error:
-                        "Username and password are required"
-                });
-
-            }
-
-
-            if (
-                username.length < 3 ||
-                username.length > 24
-            ) {
-
-                return res.status(400).json({
-                    error:
-                        "Username must be 3-24 characters"
-                });
-
-            }
-
-
-            if (password.length < 6) {
-
-                return res.status(400).json({
-                    error:
-                        "Password must be at least 6 characters"
-                });
-
-            }
-
-
-            const normalizedUsername =
-                username.toLowerCase();
-
-
-            const existingUser =
-                await User.findOne({
-                    username:
-                        normalizedUsername
-                });
-
-
-            if (existingUser) {
-
-                return res.status(409).json({
-                    error:
-                        "Username already exists"
-                });
-
-            }
-
-
-            const hashedPassword =
-                await bcrypt.hash(
-                    password,
-                    12
-                );
-
-
-            const token =
-                crypto
-                    .randomBytes(48)
-                    .toString("hex");
-
-
-            const user =
-                await User.create({
-
-                    username:
-                        normalizedUsername,
-
-                    password:
-                        hashedPassword,
-
-                    authToken:
-                        token,
-
-                    status:
-                        "online"
-
-                });
-
-
-            res.status(201).json({
-
-                message:
-                    "Account created",
-
-                token,
-
-                user: {
-
-                    id:
-                        user._id,
-
-                    username:
-                        user.username,
-
-                    avatar:
-                        user.avatar
-
-                }
-
-            });
-
-
-        } catch (error) {
-
-            console.error(
-                "Registration error:",
-                error
-            );
-
-
-            res.status(500).json({
+            return res.status(400).json({
                 error:
-                    "Registration failed"
+                    "Username and password are required"
             });
 
         }
 
+        if (
+            username.length < 3 ||
+            username.length > 24
+        ) {
+
+            return res.status(400).json({
+                error:
+                    "Username must be 3-24 characters"
+            });
+
+        }
+
+        if (password.length < 6) {
+
+            return res.status(400).json({
+                error:
+                    "Password must be at least 6 characters"
+            });
+
+        }
+
+        const existingUser =
+            await User.findOne({
+                username
+            });
+
+        if (existingUser) {
+
+            return res.status(409).json({
+                error:
+                    "Username already exists"
+            });
+
+        }
+
+        const hashedPassword =
+            await bcrypt.hash(
+                password,
+                12
+            );
+
+        const token =
+            crypto
+                .randomBytes(48)
+                .toString("hex");
+
+        const user =
+            await User.create({
+
+                username,
+
+                password:
+                    hashedPassword,
+
+                authToken:
+                    token,
+
+                status:
+                    "online"
+
+            });
+
+        return res.status(201).json({
+
+            message:
+                "Account created",
+
+            token,
+
+            user: {
+
+                id:
+                    user._id,
+
+                username:
+                    user.username,
+
+                avatar:
+                    user.avatar
+
+            }
+
+        });
+
+    } catch (error) {
+
+        console.error(
+            "Registration error:",
+            error
+        );
+
+        if (error.code === 11000) {
+
+            return res.status(409).json({
+                error:
+                    "Username already exists"
+            });
+
+        }
+
+        return res.status(500).json({
+            error:
+                "Registration failed"
+        });
+
     }
-);
 
+});
 
-/* =========================
+/* =====================================================
    LOGIN
-========================= */
+===================================================== */
+
+app.post("/api/login", async (req, res) => {
+
+    try {
+
+        const {
+            username,
+            password
+        } = req.body;
+
+        const cleanUsername =
+            username?.trim().toLowerCase();
+
+        if (
+            !cleanUsername ||
+            !password
+        ) {
+
+            return res.status(400).json({
+                error:
+                    "Username and password are required"
+            });
+
+        }
+
+        const user =
+            await User.findOne({
+                username:
+                    cleanUsername
+            });
+
+        if (!user) {
+
+            return res.status(401).json({
+                error:
+                    "Invalid username or password"
+            });
+
+        }
+
+        const valid =
+            await bcrypt.compare(
+                password,
+                user.password
+            );
+
+        if (!valid) {
+
+            return res.status(401).json({
+                error:
+                    "Invalid username or password"
+            });
+
+        }
+
+        const token =
+            crypto
+                .randomBytes(48)
+                .toString("hex");
+
+        user.authToken =
+            token;
+
+        user.status =
+            "online";
+
+        await user.save();
+
+        return res.json({
+
+            message:
+                "Login successful",
+
+            token,
+
+            user: {
+
+                id:
+                    user._id,
+
+                username:
+                    user.username,
+
+                avatar:
+                    user.avatar
+
+            }
+
+        });
+
+    } catch (error) {
+
+        console.error(
+            "Login error:",
+            error
+        );
+
+        return res.status(500).json({
+            error:
+                "Login failed"
+        });
+
+    }
+
+});
+
+/* =====================================================
+   LOGOUT
+===================================================== */
 
 app.post(
-    "/api/login",
+    "/api/logout",
+    authenticate,
     async (req, res) => {
 
         try {
 
-            const {
-                username,
-                password
-            } = req.body;
+            req.user.authToken = "";
+            req.user.status = "offline";
 
+            await req.user.save();
 
-            if (
-                !username ||
-                !password
-            ) {
-
-                return res.status(400).json({
-                    error:
-                        "Username and password are required"
-                });
-
-            }
-
-
-            const user =
-                await User.findOne({
-                    username:
-                        username.toLowerCase()
-                });
-
-
-            if (!user) {
-
-                return res.status(401).json({
-                    error:
-                        "Invalid username or password"
-                });
-
-            }
-
-
-            const valid =
-                await bcrypt.compare(
-                    password,
-                    user.password
-                );
-
-
-            if (!valid) {
-
-                return res.status(401).json({
-                    error:
-                        "Invalid username or password"
-                });
-
-            }
-
-
-            const token =
-                crypto
-                    .randomBytes(48)
-                    .toString("hex");
-
-
-            user.authToken =
-                token;
-
-            user.status =
-                "online";
-
-
-            await user.save();
-
-
-            res.json({
-
+            return res.json({
                 message:
-                    "Login successful",
-
-                token,
-
-                user: {
-
-                    id:
-                        user._id,
-
-                    username:
-                        user.username,
-
-                    avatar:
-                        user.avatar
-
-                }
-
+                    "Logged out successfully"
             });
-
 
         } catch (error) {
 
             console.error(
-                "Login error:",
+                "Logout error:",
                 error
             );
 
-
-            res.status(500).json({
+            return res.status(500).json({
                 error:
-                    "Login failed"
+                    "Logout failed"
             });
 
         }
@@ -533,17 +546,16 @@ app.post(
     }
 );
 
-
-/* =========================
+/* =====================================================
    CURRENT USER
-========================= */
+===================================================== */
 
 app.get(
     "/api/me",
     authenticate,
     async (req, res) => {
 
-        res.json({
+        return res.json({
 
             id:
                 req.user._id,
@@ -562,10 +574,9 @@ app.get(
     }
 );
 
-
-/* =========================
+/* =====================================================
    UPDATE AVATAR
-========================= */
+===================================================== */
 
 app.put(
     "/api/avatar",
@@ -578,10 +589,8 @@ app.put(
                 avatar
             } = req.body;
 
-
             if (
-                typeof avatar !==
-                "string"
+                typeof avatar !== "string"
             ) {
 
                 return res.status(400).json({
@@ -591,18 +600,14 @@ app.put(
 
             }
 
-
             req.user.avatar =
-                avatar.substring(
-                    0,
-                    500
-                );
-
+                avatar
+                    .trim()
+                    .substring(0, 500);
 
             await req.user.save();
 
-
-            res.json({
+            return res.json({
 
                 message:
                     "Avatar updated",
@@ -612,7 +617,6 @@ app.put(
 
             });
 
-
         } catch (error) {
 
             console.error(
@@ -620,8 +624,7 @@ app.put(
                 error
             );
 
-
-            res.status(500).json({
+            return res.status(500).json({
                 error:
                     "Could not update avatar"
             });
@@ -631,10 +634,81 @@ app.put(
     }
 );
 
+/* =====================================================
+   SEARCH USERS
+===================================================== */
 
-/* =========================
+app.get(
+    "/api/users/search",
+    authenticate,
+    async (req, res) => {
+
+        try {
+
+            const q =
+                String(
+                    req.query.q || ""
+                )
+                .trim()
+                .toLowerCase();
+
+            if (!q) {
+
+                return res.json([]);
+
+            }
+
+            if (q.length < 1) {
+
+                return res.json([]);
+
+            }
+
+            const users =
+                await User.find({
+
+                    username: {
+                        $regex: q,
+                        $options: "i"
+                    }
+
+                })
+                .select(
+                    "_id username avatar status"
+                )
+                .limit(20);
+
+            const filtered =
+                users.filter(
+                    user =>
+                        user._id.toString() !==
+                        req.user._id.toString()
+                );
+
+            return res.json(
+                filtered
+            );
+
+        } catch (error) {
+
+            console.error(
+                "User search error:",
+                error
+            );
+
+            return res.status(500).json({
+                error:
+                    "Could not search users"
+            });
+
+        }
+
+    }
+);
+
+/* =====================================================
    CREATE CHANNEL
-========================= */
+===================================================== */
 
 app.post(
     "/api/channels",
@@ -644,8 +718,8 @@ app.post(
         try {
 
             const name =
-                req.body.name?.trim();
-
+                req.body.name
+                    ?.trim();
 
             if (!name) {
 
@@ -656,6 +730,14 @@ app.post(
 
             }
 
+            if (name.length > 50) {
+
+                return res.status(400).json({
+                    error:
+                        "Channel name is too long"
+                });
+
+            }
 
             const channel =
                 await Channel.create({
@@ -671,21 +753,18 @@ app.post(
 
                 });
 
-
-            res.status(201).json(
+            return res.status(201).json(
                 channel
             );
-
 
         } catch (error) {
 
             console.error(
-                "Channel creation error:",
+                "Create channel error:",
                 error
             );
 
-
-            res.status(500).json({
+            return res.status(500).json({
                 error:
                     "Could not create channel"
             });
@@ -695,10 +774,9 @@ app.post(
     }
 );
 
-
-/* =========================
+/* =====================================================
    GET CHANNELS
-========================= */
+===================================================== */
 
 app.get(
     "/api/channels",
@@ -714,23 +792,26 @@ app.get(
                         req.user._id
 
                 })
+                .populate(
+                    "owner",
+                    "username avatar"
+                )
                 .sort({
                     createdAt: 1
                 });
 
-
-            res.json(channels);
-
+            return res.json(
+                channels
+            );
 
         } catch (error) {
 
             console.error(
-                "Channel list error:",
+                "Get channels error:",
                 error
             );
 
-
-            res.status(500).json({
+            return res.status(500).json({
                 error:
                     "Could not load channels"
             });
@@ -740,13 +821,12 @@ app.get(
     }
 );
 
-
-/* =========================
-   CHANNEL MESSAGES
-========================= */
+/* =====================================================
+   GET CHANNEL DETAILS
+===================================================== */
 
 app.get(
-    "/api/channels/:channelId/messages",
+    "/api/channels/:channelId",
     authenticate,
     async (req, res) => {
 
@@ -761,8 +841,15 @@ app.get(
                     members:
                         req.user._id
 
-                });
-
+                })
+                .populate(
+                    "owner",
+                    "username avatar"
+                )
+                .populate(
+                    "members",
+                    "username avatar status"
+                );
 
             if (!channel) {
 
@@ -773,38 +860,20 @@ app.get(
 
             }
 
-
-            const messages =
-                await Message.find({
-
-                    channel:
-                        channel._id
-
-                })
-                .populate(
-                    "sender",
-                    "username avatar"
-                )
-                .sort({
-                    createdAt: 1
-                })
-                .limit(100);
-
-
-            res.json(messages);
-
+            return res.json(
+                channel
+            );
 
         } catch (error) {
 
             console.error(
-                "Channel messages error:",
+                "Channel details error:",
                 error
             );
 
-
-            res.status(500).json({
+            return res.status(500).json({
                 error:
-                    "Could not load messages"
+                    "Could not load channel"
             });
 
         }
@@ -812,214 +881,84 @@ app.get(
     }
 );
 
+/* =====================================================
+   INVITE / ADD USER TO CHANNEL
+===================================================== */
 
-/* =========================
-   SEARCH USERS
-========================= */
-
-app.get(
-    "/api/users/search",
+app.post(
+    "/api/channels/:channelId/members",
     authenticate,
     async (req, res) => {
 
         try {
 
-            const query =
-                req.query.q?.trim();
+            const {
+                userId,
+                username
+            } = req.body;
 
+            /* -----------------------------------------
+               FIND CHANNEL
+            ----------------------------------------- */
 
-            if (
-                !query ||
-                query.length < 2
-            ) {
-
-                return res.json([]);
-
-            }
-
-
-            const users =
-                await User.find({
-
-                    username: {
-                        $regex:
-                            query,
-                        $options:
-                            "i"
-                    },
-
-                    _id: {
-                        $ne:
-                            req.user._id
-                    }
-
-                })
-                .select(
-                    "username avatar status"
-                )
-                .limit(20);
-
-
-            res.json(users);
-
-
-        } catch (error) {
-
-            console.error(
-                "User search error:",
-                error
-            );
-
-
-            res.status(500).json({
-                error:
-                    "Could not search users"
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================
-   GET DM CONVERSATIONS
-========================= */
-
-app.get(
-    "/api/dms",
-    authenticate,
-    async (req, res) => {
-
-        try {
-
-            const messages =
-                await Message.find({
-
-                    channel:
-                        null,
-
-                    dmUsers:
-                        req.user._id
-
-                })
-                .populate(
-                    "sender",
-                    "username avatar status"
-                )
-                .populate(
-                    "dmUsers",
-                    "username avatar status"
-                )
-                .sort({
-                    createdAt: -1
-                })
-                .limit(500);
-
-
-            const conversations =
-                new Map();
-
-
-            for (
-                const message of messages
-            ) {
-
-                const otherUser =
-                    message.dmUsers.find(
-                        person =>
-                            String(
-                                person._id
-                            ) !==
-                            String(
-                                req.user._id
-                            )
-                    );
-
-
-                if (!otherUser)
-                    continue;
-
-
-                const id =
-                    String(
-                        otherUser._id
-                    );
-
-
-                if (
-                    !conversations.has(id)
-                ) {
-
-                    conversations.set(
-                        id,
-                        {
-
-                            user:
-                                otherUser,
-
-                            lastMessage: {
-
-                                text:
-                                    message.text,
-
-                                createdAt:
-                                    message.createdAt
-
-                            }
-
-                        }
-                    );
-
-                }
-
-            }
-
-
-            res.json(
-                Array.from(
-                    conversations.values()
-                )
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                "DM list error:",
-                error
-            );
-
-
-            res.status(500).json({
-                error:
-                    "Could not load conversations"
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================
-   GET DM MESSAGES
-========================= */
-
-app.get(
-    "/api/dms/:userId/messages",
-    authenticate,
-    async (req, res) => {
-
-        try {
-
-            const otherUser =
-                await User.findById(
-                    req.params.userId
+            const channel =
+                await Channel.findById(
+                    req.params.channelId
                 );
 
+            if (!channel) {
 
-            if (!otherUser) {
+                return res.status(404).json({
+                    error:
+                        "Channel not found"
+                });
+
+            }
+
+            /* -----------------------------------------
+               ONLY OWNER CAN INVITE
+            ----------------------------------------- */
+
+            if (
+                channel.owner.toString() !==
+                req.user._id.toString()
+            ) {
+
+                return res.status(403).json({
+                    error:
+                        "Only the channel owner can invite people"
+                });
+
+            }
+
+            /* -----------------------------------------
+               FIND USER
+            ----------------------------------------- */
+
+            let targetUser = null;
+
+            if (userId) {
+
+                targetUser =
+                    await User.findById(
+                        userId
+                    );
+
+            } else if (username) {
+
+                targetUser =
+                    await User.findOne({
+
+                        username:
+                            String(username)
+                                .trim()
+                                .toLowerCase()
+
+                    });
+
+            }
+
+            if (!targetUser) {
 
                 return res.status(404).json({
                     error:
@@ -1028,155 +967,51 @@ app.get(
 
             }
 
+            /* -----------------------------------------
+               DON'T INVITE YOURSELF
+            ----------------------------------------- */
 
             if (
-                String(otherUser._id) ===
-                String(req.user._id)
+                targetUser._id.toString() ===
+                req.user._id.toString()
             ) {
 
                 return res.status(400).json({
                     error:
-                        "You cannot DM yourself"
+                        "You are already the channel owner"
                 });
 
             }
 
+            /* -----------------------------------------
+               CHECK EXISTING MEMBER
+            ----------------------------------------- */
 
-            const messages =
-                await Message.find({
+            const alreadyMember =
+                channel.members.some(
+                    member =>
+                        member.toString() ===
+                        targetUser._id.toString()
+                );
 
-                    channel:
-                        null,
+            if (alreadyMember) {
 
-                    dmUsers: {
-                        $all: [
+                return res.status(409).json({
+                    error:
+                        "User is already in this channel"
+                });
 
-                            req.user._id,
+            }
 
-                            otherUser._id
+            /* -----------------------------------------
+               ADD MEMBER
+            ----------------------------------------- */
 
-                        ]
-
-                    }
-
-                })
-                .populate(
-                    "sender",
-                    "username avatar"
-                )
-                .sort({
-                    createdAt: 1
-                })
-                .limit(100);
-
-
-            res.json(messages);
-
-
-        } catch (error) {
-
-            console.error(
-                "DM messages error:",
-                error
+            channel.members.push(
+                targetUser._id
             );
 
+            await channel.save();
 
-            res.status(500).json({
-                error:
-                    "Could not load DM messages"
-            });
-
-        }
-
-    }
-);
-
-
-/* =========================
-   SOCKET AUTH
-========================= */
-
-io.use(
-    async (socket, next) => {
-
-        try {
-
-            const token =
-                socket.handshake
-                    .auth
-                    ?.token;
-
-
-            if (!token) {
-
-                return next(
-                    new Error(
-                        "Authentication required"
-                    )
-                );
-
-            }
-
-
-            const user =
-                await User.findOne({
-                    authToken:
-                        token
-                });
-
-
-            if (!user) {
-
-                return next(
-                    new Error(
-                        "Invalid authentication"
-                    )
-                );
-
-            }
-
-
-            socket.user =
-                user;
-
-
-            next();
-
-
-        } catch (error) {
-
-            next(error);
-
-        }
-
-    }
-);
-
-
-/* =========================
-   SOCKET CONNECTION
-========================= */
-
-io.on(
-    "connection",
-    async socket => {
-
-        const user =
-            socket.user;
-
-
-        console.log(
-            `🟢 ${user.username} connected`
-        );
-
-
-        user.status =
-            "online";
-
-
-        await user.save();
-
-
-        /* =========================
-           CHANNEL JOIN
-    
+            /* -----------------------------------------
+             
