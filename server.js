@@ -12,12 +12,6 @@ const app = express();
 const server = http.createServer(app);
 
 /* =====================================================
-   CONFIG
-===================================================== */
-
-const PORT = process.env.PORT || 3000;
-
-/* =====================================================
    CORS
 ===================================================== */
 
@@ -44,22 +38,22 @@ const io = new Server(server, {
    DATABASE
 ===================================================== */
 
-if (!process.env.MONGODB_URI) {
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
     console.error("❌ MONGODB_URI is missing!");
 } else {
-
-    mongoose.connect(process.env.MONGODB_URI)
+    mongoose.connect(MONGODB_URI)
         .then(() => {
             console.log("✅ CELDEX MongoDB connected");
         })
-        .catch((error) => {
-            console.error("❌ MongoDB error:", error);
+        .catch((err) => {
+            console.error("❌ MongoDB error:", err);
         });
-
 }
 
 /* =====================================================
-   USER MODEL
+   USER SCHEMA
 ===================================================== */
 
 const userSchema = new mongoose.Schema({
@@ -86,7 +80,6 @@ const userSchema = new mongoose.Schema({
 
     status: {
         type: String,
-        enum: ["online", "offline"],
         default: "offline"
     },
 
@@ -102,7 +95,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model("User", userSchema);
 
 /* =====================================================
-   CHANNEL MODEL
+   CHANNEL SCHEMA
 ===================================================== */
 
 const channelSchema = new mongoose.Schema({
@@ -137,7 +130,46 @@ const channelSchema = new mongoose.Schema({
 const Channel = mongoose.model("Channel", channelSchema);
 
 /* =====================================================
-   MESSAGE MODEL
+   CHANNEL INVITE SCHEMA
+===================================================== */
+
+const channelInviteSchema = new mongoose.Schema({
+
+    channel: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Channel",
+        required: true
+    },
+
+    inviter: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true
+    },
+
+    invitedUser: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true
+    },
+
+    status: {
+        type: String,
+        enum: ["pending", "accepted", "declined"],
+        default: "pending"
+    }
+
+}, {
+    timestamps: true
+});
+
+const ChannelInvite = mongoose.model(
+    "ChannelInvite",
+    channelInviteSchema
+);
+
+/* =====================================================
+   MESSAGE SCHEMA
 ===================================================== */
 
 const messageSchema = new mongoose.Schema({
@@ -173,15 +205,7 @@ const messageSchema = new mongoose.Schema({
 const Message = mongoose.model("Message", messageSchema);
 
 /* =====================================================
-   HELPER
-===================================================== */
-
-function validObjectId(id) {
-    return mongoose.Types.ObjectId.isValid(id);
-}
-
-/* =====================================================
-   AUTH MIDDLEWARE
+   AUTHENTICATION
 ===================================================== */
 
 async function authenticate(req, res, next) {
@@ -191,11 +215,9 @@ async function authenticate(req, res, next) {
         const header = req.headers.authorization;
 
         if (!header || !header.startsWith("Bearer ")) {
-
             return res.status(401).json({
                 error: "Authentication required"
             });
-
         }
 
         const token = header.substring(7);
@@ -205,11 +227,9 @@ async function authenticate(req, res, next) {
         });
 
         if (!user) {
-
             return res.status(401).json({
                 error: "Invalid login session"
             });
-
         }
 
         req.user = user;
@@ -220,120 +240,14 @@ async function authenticate(req, res, next) {
 
         console.error("Authentication error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Authentication error"
         });
-
     }
-
 }
 
 /* =====================================================
-   CHANNEL MEMBER MIDDLEWARE
-===================================================== */
-
-async function authenticateChannelMember(req, res, next) {
-
-    try {
-
-        const channelId = req.params.channelId;
-
-        if (!validObjectId(channelId)) {
-
-            return res.status(400).json({
-                error: "Invalid channel ID"
-            });
-
-        }
-
-        const channel = await Channel.findOne({
-            _id: channelId,
-            members: req.user._id
-        });
-
-        if (!channel) {
-
-            return res.status(403).json({
-                error: "You are not a member of this channel"
-            });
-
-        }
-
-        req.channel = channel;
-
-        next();
-
-    } catch (error) {
-
-        console.error(error);
-
-        return res.status(500).json({
-            error: "Channel access error"
-        });
-
-    }
-
-}
-
-/* =====================================================
-   CHANNEL OWNER MIDDLEWARE
-===================================================== */
-
-async function authenticateChannelOwner(req, res, next) {
-
-    try {
-
-        const channelId =
-            req.params.channelId ||
-            req.params.id;
-
-        if (!validObjectId(channelId)) {
-
-            return res.status(400).json({
-                error: "Invalid channel ID"
-            });
-
-        }
-
-        const channel = await Channel.findById(channelId);
-
-        if (!channel) {
-
-            return res.status(404).json({
-                error: "Channel not found"
-            });
-
-        }
-
-        if (
-            channel.owner.toString() !==
-            req.user._id.toString()
-        ) {
-
-            return res.status(403).json({
-                error: "Only the channel owner can do this"
-            });
-
-        }
-
-        req.channel = channel;
-
-        next();
-
-    } catch (error) {
-
-        console.error(error);
-
-        return res.status(500).json({
-            error: "Permission check failed"
-        });
-
-    }
-
-}
-
-/* =====================================================
-   TEST / HEALTH
+   TEST
 ===================================================== */
 
 app.get("/", (req, res) => {
@@ -356,46 +270,34 @@ app.post("/api/register", async (req, res) => {
 
         let { username, password } = req.body;
 
-        username = username?.trim();
+        username = username?.trim().toLowerCase();
 
         if (!username || !password) {
-
             return res.status(400).json({
                 error: "Username and password are required"
             });
-
         }
 
         if (username.length < 3 || username.length > 24) {
-
             return res.status(400).json({
                 error: "Username must be 3-24 characters"
             });
-
         }
 
         if (password.length < 6) {
-
             return res.status(400).json({
                 error: "Password must be at least 6 characters"
             });
-
         }
 
-        const normalizedUsername =
-            username.toLowerCase();
-
-        const existingUser =
-            await User.findOne({
-                username: normalizedUsername
-            });
+        const existingUser = await User.findOne({
+            username
+        });
 
         if (existingUser) {
-
             return res.status(409).json({
                 error: "Username already exists"
             });
-
         }
 
         const hashedPassword =
@@ -406,7 +308,7 @@ app.post("/api/register", async (req, res) => {
 
         const user = await User.create({
 
-            username: normalizedUsername,
+            username,
 
             password: hashedPassword,
 
@@ -416,7 +318,7 @@ app.post("/api/register", async (req, res) => {
 
         });
 
-        return res.status(201).json({
+        res.status(201).json({
 
             message: "Account created",
 
@@ -432,12 +334,11 @@ app.post("/api/register", async (req, res) => {
 
     } catch (error) {
 
-        console.error("Registration error:", error);
+        console.error("Register error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Registration failed"
         });
-
     }
 
 });
@@ -450,27 +351,26 @@ app.post("/api/login", async (req, res) => {
 
     try {
 
-        const { username, password } = req.body;
+        const username =
+            req.body.username?.trim().toLowerCase();
+
+        const password =
+            req.body.password;
 
         if (!username || !password) {
-
             return res.status(400).json({
                 error: "Username and password are required"
             });
-
         }
 
-        const user =
-            await User.findOne({
-                username: username.toLowerCase()
-            });
+        const user = await User.findOne({
+            username
+        });
 
         if (!user) {
-
             return res.status(401).json({
                 error: "Invalid username or password"
             });
-
         }
 
         const valid =
@@ -480,11 +380,9 @@ app.post("/api/login", async (req, res) => {
             );
 
         if (!valid) {
-
             return res.status(401).json({
                 error: "Invalid username or password"
             });
-
         }
 
         const token =
@@ -495,7 +393,7 @@ app.post("/api/login", async (req, res) => {
 
         await user.save();
 
-        return res.json({
+        res.json({
 
             message: "Login successful",
 
@@ -513,10 +411,9 @@ app.post("/api/login", async (req, res) => {
 
         console.error("Login error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Login failed"
         });
-
     }
 
 });
@@ -527,19 +424,86 @@ app.post("/api/login", async (req, res) => {
 
 app.get("/api/me", authenticate, async (req, res) => {
 
-    return res.json({
+    res.json({
 
         id: req.user._id,
-
         username: req.user.username,
-
         avatar: req.user.avatar,
-
         status: req.user.status
 
     });
 
 });
+
+/* =====================================================
+   USER SEARCH
+===================================================== */
+
+/*
+   THIS FIXES THE SEARCH PROBLEM.
+
+   Frontend can call:
+
+   /api/users/search?q=username
+*/
+
+app.get("/api/users/search", authenticate, async (req, res) => {
+
+    try {
+
+        const q =
+            String(req.query.q || "")
+                .trim()
+                .toLowerCase();
+
+        if (!q) {
+            return res.json([]);
+        }
+
+        if (q.length < 1) {
+            return res.json([]);
+        }
+
+        const users = await User.find({
+            username: {
+                $regex: "^" + escapeRegex(q),
+                $options: "i"
+            },
+
+            _id: {
+                $ne: req.user._id
+            }
+
+        })
+        .select("_id username avatar status")
+        .limit(20);
+
+        res.json(users);
+
+    } catch (error) {
+
+        console.error("User search error:", error);
+
+        res.status(500).json({
+            error: "User search failed"
+        });
+
+    }
+
+});
+
+/* =====================================================
+   REGEX ESCAPE
+===================================================== */
+
+function escapeRegex(text) {
+
+    return text.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&"
+    );
+
+}
 
 /* =====================================================
    UPDATE AVATAR
@@ -552,11 +516,9 @@ app.put("/api/avatar", authenticate, async (req, res) => {
         const { avatar } = req.body;
 
         if (typeof avatar !== "string") {
-
             return res.status(400).json({
                 error: "Invalid avatar"
             });
-
         }
 
         req.user.avatar =
@@ -564,7 +526,7 @@ app.put("/api/avatar", authenticate, async (req, res) => {
 
         await req.user.save();
 
-        return res.json({
+        res.json({
 
             message: "Avatar updated",
 
@@ -574,59 +536,10 @@ app.put("/api/avatar", authenticate, async (req, res) => {
 
     } catch (error) {
 
-        console.error(error);
+        console.error("Avatar error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Could not update avatar"
-        });
-
-    }
-
-});
-
-/* =====================================================
-   SEARCH USERS
-===================================================== */
-
-app.get("/api/users/search", authenticate, async (req, res) => {
-
-    try {
-
-        const query =
-            String(req.query.username || "")
-                .trim()
-                .toLowerCase();
-
-        if (!query) {
-
-            return res.json([]);
-
-        }
-
-        const users =
-            await User.find({
-
-                username: {
-                    $regex: query,
-                    $options: "i"
-                },
-
-                _id: {
-                    $ne: req.user._id
-                }
-
-            })
-            .select("_id username avatar status")
-            .limit(20);
-
-        return res.json(users);
-
-    } catch (error) {
-
-        console.error(error);
-
-        return res.status(500).json({
-            error: "User search failed"
         });
 
     }
@@ -642,54 +555,44 @@ app.post("/api/channels", authenticate, async (req, res) => {
     try {
 
         const name =
-            String(req.body.name || "").trim();
+            req.body.name?.trim();
 
         const isPrivate =
             Boolean(req.body.isPrivate);
 
         if (!name) {
-
             return res.status(400).json({
                 error: "Channel name required"
             });
-
         }
 
         if (name.length > 50) {
-
             return res.status(400).json({
-                error: "Channel name cannot exceed 50 characters"
+                error: "Channel name is too long"
             });
-
         }
 
-        const channel =
-            await Channel.create({
+        const channel = await Channel.create({
 
-                name,
+            name,
 
-                owner: req.user._id,
+            owner: req.user._id,
 
-                members: [
-                    req.user._id
-                ],
+            members: [
+                req.user._id
+            ],
 
-                isPrivate
+            isPrivate
 
-            });
+        });
 
-        const populated =
-            await Channel.findById(channel._id)
-                .populate("owner", "username avatar")
-                .populate("members", "username avatar status");
-
-        return res.status(201).json(populated);
+        res.status(201).json(channel);
 
     } catch (error) {
 
         console.error("Create channel error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Could not create channel"
         });
 
@@ -705,43 +608,23 @@ app.get("/api/channels", authenticate, async (req, res) => {
 
     try {
 
-        /*
-         * IMPORTANT:
-         *
-         * Private channels are returned ONLY
-         * when the current user is a member.
-         *
-         * Public channels are also returned here.
-         */
+        const channels = await Channel.find({
 
-        const channels =
-            await Channel.find({
+            members: req.user._id
 
-                $or: [
+        })
+        .populate("owner", "username avatar")
+        .sort({
+            createdAt: 1
+        });
 
-                    {
-                        isPrivate: false
-                    },
-
-                    {
-                        members: req.user._id
-                    }
-
-                ]
-
-            })
-            .populate("owner", "username avatar")
-            .sort({
-                createdAt: 1
-            });
-
-        return res.json(channels);
+        res.json(channels);
 
     } catch (error) {
 
         console.error("Get channels error:", error);
 
-        return res.status(500).json({
+        res.status(500).json({
             error: "Could not load channels"
         });
 
@@ -750,72 +633,41 @@ app.get("/api/channels", authenticate, async (req, res) => {
 });
 
 /* =====================================================
-   GET SINGLE CHANNEL
+   GET CHANNEL
 ===================================================== */
 
 app.get(
     "/api/channels/:channelId",
     authenticate,
-    authenticateChannelMember,
-    async (req, res) => {
-
-        const channel =
-            await Channel.findById(req.channel._id)
-                .populate(
-                    "owner",
-                    "username avatar status"
-                )
-                .populate(
-                    "members",
-                    "username avatar status"
-                );
-
-        return res.json(channel);
-
-    }
-);
-
-/* =====================================================
-   GET CHANNEL MEMBERS
-===================================================== */
-
-app.get(
-    "/api/channels/:channelId/members",
-    authenticate,
-    authenticateChannelMember,
     async (req, res) => {
 
         try {
 
             const channel =
-                await Channel.findById(
-                    req.channel._id
-                )
-                .populate(
-                    "owner",
-                    "username avatar status"
-                )
+                await Channel.findOne({
+                    _id: req.params.channelId,
+                    members: req.user._id
+                })
+                .populate("owner", "username avatar")
                 .populate(
                     "members",
                     "username avatar status"
                 );
 
-            return res.json({
+            if (!channel) {
+                return res.status(404).json({
+                    error: "Channel not found"
+                });
+            }
 
-                channelId: channel._id,
-
-                owner: channel.owner,
-
-                members: channel.members
-
-            });
+            res.json(channel);
 
         } catch (error) {
 
             console.error(error);
 
-            return res.status(500).json({
-                error: "Could not load members"
+            res.status(500).json({
+                error: "Could not load channel"
             });
 
         }
@@ -830,37 +682,46 @@ app.get(
 app.post(
     "/api/channels/:channelId/invite",
     authenticate,
-    authenticateChannelOwner,
     async (req, res) => {
 
         try {
 
-            const username =
-                String(
-                    req.body.username || ""
-                )
-                .trim()
-                .toLowerCase();
+            const { username } = req.body;
 
-            if (!username) {
+            const channel =
+                await Channel.findOne({
+                    _id: req.params.channelId
+                });
 
-                return res.status(400).json({
-                    error: "Username required"
+            if (!channel) {
+                return res.status(404).json({
+                    error: "Channel not found"
+                });
+            }
+
+            /* ONLY OWNER CAN INVITE */
+
+            if (
+                channel.owner.toString() !==
+                req.user._id.toString()
+            ) {
+
+                return res.status(403).json({
+                    error: "Only the channel owner can invite people"
                 });
 
             }
 
             const user =
                 await User.findOne({
-                    username
+                    username:
+                        username?.trim().toLowerCase()
                 });
 
             if (!user) {
-
                 return res.status(404).json({
                     error: "User not found"
                 });
-
             }
 
             if (
@@ -869,56 +730,57 @@ app.post(
             ) {
 
                 return res.status(400).json({
-                    error: "You are already the channel owner"
+                    error: "You are already the owner"
                 });
 
             }
 
             const alreadyMember =
-                req.channel.members.some(
+                channel.members.some(
                     member =>
                         member.toString() ===
                         user._id.toString()
                 );
 
             if (alreadyMember) {
-
-                return res.status(409).json({
-                    error: "User is already a channel member"
+                return res.status(400).json({
+                    error: "User is already in this channel"
                 });
-
             }
 
-            req.channel.members.push(user._id);
+            const existingInvite =
+                await ChannelInvite.findOne({
+                    channel: channel._id,
+                    invitedUser: user._id,
+                    status: "pending"
+                });
 
-            await req.channel.save();
+            if (existingInvite) {
+                return res.status(400).json({
+                    error: "Invitation already sent"
+                });
+            }
 
-            const updated =
-                await Channel.findById(
-                    req.channel._id
-                )
-                .populate(
-                    "owner",
-                    "username avatar status"
-                )
-                .populate(
-                    "members",
-                    "username avatar status"
-                );
+            const invite =
+                await ChannelInvite.create({
 
-            /*
-             * Notify the invited user if online.
-             */
+                    channel: channel._id,
 
-            io.emit("channelUpdated", {
-                channelId: req.channel._id.toString()
-            });
+                    inviter: req.user._id,
 
-            return res.json({
+                    invitedUser: user._id
 
-                message: "User invited successfully",
+                });
 
-                channel: updated
+            res.status(201).json({
+
+                message: "Invitation sent",
+
+                invite: {
+                    id: invite._id,
+                    channel: channel._id,
+                    username: user.username
+                }
 
             });
 
@@ -926,8 +788,188 @@ app.post(
 
             console.error("Invite error:", error);
 
-            return res.status(500).json({
+            res.status(500).json({
                 error: "Could not invite user"
+            });
+
+        }
+
+    }
+);
+
+/* =====================================================
+   GET MY CHANNEL INVITES
+===================================================== */
+
+app.get(
+    "/api/channel-invites",
+    authenticate,
+    async (req, res) => {
+
+        try {
+
+            const invites =
+                await ChannelInvite.find({
+
+                    invitedUser: req.user._id,
+
+                    status: "pending"
+
+                })
+                .populate(
+                    "channel",
+                    "name isPrivate owner"
+                )
+                .populate(
+                    "inviter",
+                    "username avatar"
+                )
+                .sort({
+                    createdAt: -1
+                });
+
+            res.json(invites);
+
+        } catch (error) {
+
+            console.error(error);
+
+            res.status(500).json({
+                error: "Could not load invitations"
+            });
+
+        }
+
+    }
+);
+
+/* =====================================================
+   ACCEPT CHANNEL INVITE
+===================================================== */
+
+app.post(
+    "/api/channel-invites/:inviteId/accept",
+    authenticate,
+    async (req, res) => {
+
+        try {
+
+            const invite =
+                await ChannelInvite.findOne({
+                    _id: req.params.inviteId,
+
+                    invitedUser: req.user._id,
+
+                    status: "pending"
+
+                });
+
+            if (!invite) {
+                return res.status(404).json({
+                    error: "Invitation not found"
+                });
+            }
+
+            const channel =
+                await Channel.findById(
+                    invite.channel
+                );
+
+            if (!channel) {
+
+                invite.status = "declined";
+
+                await invite.save();
+
+                return res.status(404).json({
+                    error: "Channel no longer exists"
+                });
+
+            }
+
+            const alreadyMember =
+                channel.members.some(
+                    member =>
+                        member.toString() ===
+                        req.user._id.toString()
+                );
+
+            if (!alreadyMember) {
+
+                channel.members.push(
+                    req.user._id
+                );
+
+                await channel.save();
+
+            }
+
+            invite.status = "accepted";
+
+            await invite.save();
+
+            res.json({
+
+                message: "Joined channel",
+
+                channel
+
+            });
+
+        } catch (error) {
+
+            console.error(error);
+
+            res.status(500).json({
+                error: "Could not accept invitation"
+            });
+
+        }
+
+    }
+);
+
+/* =====================================================
+   DECLINE CHANNEL INVITE
+===================================================== */
+
+app.post(
+    "/api/channel-invites/:inviteId/decline",
+    authenticate,
+    async (req, res) => {
+
+        try {
+
+            const invite =
+                await ChannelInvite.findOne({
+                    _id: req.params.inviteId,
+
+                    invitedUser: req.user._id,
+
+                    status: "pending"
+
+                });
+
+            if (!invite) {
+                return res.status(404).json({
+                    error: "Invitation not found"
+                });
+            }
+
+            invite.status = "declined";
+
+            await invite.save();
+
+            res.json({
+                message: "Invitation declined"
+            });
+
+        } catch (error) {
+
+            console.error(error);
+
+            res.status(500).json({
+                error: "Could not decline invitation"
             });
 
         }
@@ -942,65 +984,70 @@ app.post(
 app.delete(
     "/api/channels/:channelId/members/:userId",
     authenticate,
-    authenticateChannelOwner,
     async (req, res) => {
 
         try {
 
-            const userId =
-                req.params.userId;
+            const channel =
+                await Channel.findById(
+                    req.params.channelId
+                );
 
-            if (!validObjectId(userId)) {
+            if (!channel) {
+                return res.status(404).json({
+                    error: "Channel not found"
+                });
+            }
 
-                return res.status(400).json({
-                    error: "Invalid user ID"
+            /* OWNER ONLY */
+
+            if (
+                channel.owner.toString() !==
+                req.user._id.toString()
+            ) {
+
+                return res.status(403).json({
+                    error: "Only the channel owner can remove members"
                 });
 
             }
 
-            /*
-             * Owner cannot remove themselves
-             * through this endpoint.
-             */
+            /* OWNER CANNOT REMOVE THEMSELVES */
 
             if (
-                userId ===
-                req.channel.owner.toString()
+                req.params.userId ===
+                channel.owner.toString()
             ) {
 
                 return res.status(400).json({
-                    error: "Owner cannot remove themselves"
+                    error: "Owner cannot be removed"
                 });
 
             }
 
-            const memberExists =
-                req.channel.members.some(
+            const wasMember =
+                channel.members.some(
                     member =>
-                        member.toString() === userId
+                        member.toString() ===
+                        req.params.userId
                 );
 
-            if (!memberExists) {
-
+            if (!wasMember) {
                 return res.status(404).json({
-                    error: "User is not a channel member"
+                    error: "User is not a member"
                 });
-
             }
 
-            req.channel.members =
-                req.channel.members.filter(
+            channel.members =
+                channel.members.filter(
                     member =>
-                        member.toString() !== userId
+                        member.toString() !==
+                        req.params.userId
                 );
 
-            await req.channel.save();
+            await channel.save();
 
-            io.emit("channelUpdated", {
-                channelId: req.channel._id.toString()
-            });
-
-            return res.json({
+            res.json({
                 message: "Member removed"
             });
 
@@ -1008,7 +1055,7 @@ app.delete(
 
             console.error("Remove member error:", error);
 
-            return res.status(500).json({
+            res.status(500).json({
                 error: "Could not remove member"
             });
 
@@ -1024,43 +1071,45 @@ app.delete(
 app.post(
     "/api/channels/:channelId/leave",
     authenticate,
-    authenticateChannelMember,
     async (req, res) => {
 
         try {
 
-            /*
-             * Channel owner cannot leave.
-             * They must delete the channel or
-             * ownership transfer can be added later.
-             */
+            const channel =
+                await Channel.findById(
+                    req.params.channelId
+                );
+
+            if (!channel) {
+                return res.status(404).json({
+                    error: "Channel not found"
+                });
+            }
+
+            /* OWNER CANNOT LEAVE */
 
             if (
-                req.channel.owner.toString() ===
+                channel.owner.toString() ===
                 req.user._id.toString()
             ) {
 
                 return res.status(400).json({
                     error:
-                        "Channel owner cannot leave. Delete the channel instead."
+                        "Channel owner cannot leave. Delete or transfer the channel first."
                 });
 
             }
 
-            req.channel.members =
-                req.channel.members.filter(
+            channel.members =
+                channel.members.filter(
                     member =>
                         member.toString() !==
                         req.user._id.toString()
                 );
 
-            await req.channel.save();
+            await channel.save();
 
-            io.emit("channelUpdated", {
-                channelId: req.channel._id.toString()
-            });
-
-            return res.json({
+            res.json({
                 message: "You left the channel"
             });
 
@@ -1068,177 +1117,8 @@ app.post(
 
             console.error("Leave channel error:", error);
 
-            return res.status(500).json({
+            res.status(500).json({
                 error: "Could not leave channel"
-            });
-
-        }
-
-    }
-);
-
-/* =====================================================
-   RENAME CHANNEL
-===================================================== */
-
-app.put(
-    "/api/channels/:channelId",
-    authenticate,
-    authenticateChannelOwner,
-    async (req, res) => {
-
-        try {
-
-            const name =
-                String(req.body.name || "").trim();
-
-            if (!name) {
-
-                return res.status(400).json({
-                    error: "Channel name required"
-                });
-
-            }
-
-            if (name.length > 50) {
-
-                return res.status(400).json({
-                    error: "Channel name cannot exceed 50 characters"
-                });
-
-            }
-
-            req.channel.name = name;
-
-            await req.channel.save();
-
-            io.emit("channelUpdated", {
-                channelId: req.channel._id.toString()
-            });
-
-            return res.json({
-
-                message: "Channel renamed",
-
-                channel: req.channel
-
-            });
-
-        } catch (error) {
-
-            console.error("Rename channel error:", error);
-
-            return res.status(500).json({
-                error: "Could not rename channel"
-            });
-
-        }
-
-    }
-);
-
-/* =====================================================
-   CHANGE CHANNEL PRIVACY
-===================================================== */
-
-app.put(
-    "/api/channels/:channelId/privacy",
-    authenticate,
-    authenticateChannelOwner,
-    async (req, res) => {
-
-        try {
-
-            if (
-                typeof req.body.isPrivate !==
-                "boolean"
-            ) {
-
-                return res.status(400).json({
-                    error: "isPrivate must be true or false"
-                });
-
-            }
-
-            req.channel.isPrivate =
-                req.body.isPrivate;
-
-            await req.channel.save();
-
-            io.emit("channelUpdated", {
-                channelId: req.channel._id.toString()
-            });
-
-            return res.json({
-
-                message: "Channel privacy updated",
-
-                isPrivate:
-                    req.channel.isPrivate
-
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Privacy update error:",
-                error
-            );
-
-            return res.status(500).json({
-                error: "Could not update privacy"
-            });
-
-        }
-
-    }
-);
-
-/* =====================================================
-   DELETE CHANNEL
-===================================================== */
-
-app.delete(
-    "/api/channels/:channelId",
-    authenticate,
-    authenticateChannelOwner,
-    async (req, res) => {
-
-        try {
-
-            const channelId =
-                req.channel._id;
-
-            /*
-             * Delete channel messages first.
-             */
-
-            await Message.deleteMany({
-                channel: channelId
-            });
-
-            await Channel.deleteOne({
-                _id: channelId
-            });
-
-            io.emit("channelDeleted", {
-                channelId:
-                    channelId.toString()
-            });
-
-            return res.json({
-                message: "Channel deleted"
-            });
-
-        } catch (error) {
-
-            console.error(
-                "Delete channel error:",
-                error
-            );
-
-            return res.status(500).json({
-                error: "Could not delete channel"
             });
 
         }
@@ -1253,14 +1133,27 @@ app.delete(
 app.get(
     "/api/channels/:channelId/messages",
     authenticate,
-    authenticateChannelMember,
     async (req, res) => {
 
         try {
 
+            const channel =
+                await Channel.findOne({
+                    _id: req.params.channelId,
+
+                    members: req.user._id
+
+                });
+
+            if (!channel) {
+                return res.status(403).json({
+                    error: "You are not a member of this channel"
+                });
+            }
+
             const messages =
                 await Message.find({
-                    channel: req.channel._id
+                    channel: channel._id
                 })
                 .populate(
                     "sender",
@@ -1271,16 +1164,13 @@ app.get(
                 })
                 .limit(100);
 
-            return res.json(messages);
+            res.json(messages);
 
         } catch (error) {
 
-            console.error(
-                "Message loading error:",
-                error
-            );
+            console.error("Messages error:", error);
 
-            return res.status(500).json({
+            res.status(500).json({
                 error: "Could not load messages"
             });
 
@@ -1290,7 +1180,7 @@ app.get(
 );
 
 /* =====================================================
-   SOCKET AUTHENTICATION
+   SOCKET AUTH
 ===================================================== */
 
 io.use(async (socket, next) => {
@@ -1301,13 +1191,9 @@ io.use(async (socket, next) => {
             socket.handshake.auth?.token;
 
         if (!token) {
-
             return next(
-                new Error(
-                    "Authentication required"
-                )
+                new Error("Authentication required")
             );
-
         }
 
         const user =
@@ -1316,13 +1202,9 @@ io.use(async (socket, next) => {
             });
 
         if (!user) {
-
             return next(
-                new Error(
-                    "Invalid authentication"
-                )
+                new Error("Invalid authentication")
             );
-
         }
 
         socket.user = user;
@@ -1331,16 +1213,9 @@ io.use(async (socket, next) => {
 
     } catch (error) {
 
-        console.error(
-            "Socket authentication error:",
-            error
-        );
+        console.error(error);
 
-        next(
-            new Error(
-                "Authentication failed"
-            )
-        );
+        next(error);
 
     }
 
@@ -1368,21 +1243,9 @@ io.on("connection", async (socket) => {
 
     socket.on(
         "joinChannel",
-        async (channelId, callback) => {
+        async (channelId) => {
 
             try {
-
-                if (!validObjectId(channelId)) {
-
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error: "Invalid channel ID"
-                        });
-                    }
-
-                    return;
-                }
 
                 const channel =
                     await Channel.findOne({
@@ -1394,48 +1257,12 @@ io.on("connection", async (socket) => {
                     });
 
                 if (!channel) {
-
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error:
-                                "You are not a member of this channel"
-                        });
-                    }
-
                     return;
-                }
-
-                /*
-                 * Leave previous CELDEX channel rooms.
-                 */
-
-                for (const room of socket.rooms) {
-
-                    if (
-                        room.startsWith("channel:")
-                    ) {
-
-                        socket.leave(room);
-
-                    }
-
                 }
 
                 socket.join(
                     `channel:${channelId}`
                 );
-
-                socket.currentChannel =
-                    channelId;
-
-                if (callback) {
-
-                    callback({
-                        success: true
-                    });
-
-                }
 
             } catch (error) {
 
@@ -1443,15 +1270,6 @@ io.on("connection", async (socket) => {
                     "Join channel error:",
                     error
                 );
-
-                if (callback) {
-
-                    callback({
-                        success: false,
-                        error: "Could not join channel"
-                    });
-
-                }
 
             }
 
@@ -1464,64 +1282,22 @@ io.on("connection", async (socket) => {
 
     socket.on(
         "sendMessage",
-        async (data, callback) => {
+        async (data) => {
 
             try {
 
                 const {
                     channelId,
                     text
-                } = data || {};
+                } = data;
 
                 if (
                     !channelId ||
-                    typeof text !== "string"
+                    !text ||
+                    !String(text).trim()
                 ) {
-
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error: "Invalid message"
-                        });
-                    }
-
                     return;
                 }
-
-                const cleanText =
-                    text.trim();
-
-                if (!cleanText) {
-
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error: "Message cannot be empty"
-                        });
-                    }
-
-                    return;
-                }
-
-                if (cleanText.length > 2000) {
-
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error:
-                                "Message cannot exceed 2000 characters"
-                        });
-                    }
-
-                    return;
-                }
-
-                /*
-                 * CRITICAL SECURITY CHECK:
-                 *
-                 * A user can only send a message
-                 * if they are currently a member.
-                 */
 
                 const channel =
                     await Channel.findOne({
@@ -1533,17 +1309,6 @@ io.on("connection", async (socket) => {
                     });
 
                 if (!channel) {
-
-                    if (callback) {
-
-                        callback({
-                            success: false,
-                            error:
-                                "You are not a member of this channel"
-                        });
-
-                    }
-
                     return;
                 }
 
@@ -1554,35 +1319,27 @@ io.on("connection", async (socket) => {
 
                         channel: channel._id,
 
-                        text: cleanText
+                        text:
+                            String(text)
+                                .trim()
+                                .substring(0, 2000)
 
                     });
 
                 const fullMessage =
-                    await Message.findById(
-                        message._id
-                    )
-                    .populate(
-                        "sender",
-                        "username avatar"
-                    );
+                    await Message
+                        .findById(message._id)
+                        .populate(
+                            "sender",
+                            "username avatar"
+                        );
 
                 io.to(
                     `channel:${channelId}`
-                )
-                .emit(
+                ).emit(
                     "newMessage",
                     fullMessage
                 );
-
-                if (callback) {
-
-                    callback({
-                        success: true,
-                        message: fullMessage
-                    });
-
-                }
 
             } catch (error) {
 
@@ -1590,15 +1347,6 @@ io.on("connection", async (socket) => {
                     "Message error:",
                     error
                 );
-
-                if (callback) {
-
-                    callback({
-                        success: false,
-                        error: "Could not send message"
-                    });
-
-                }
 
             }
 
@@ -1611,102 +1359,26 @@ io.on("connection", async (socket) => {
 
     socket.on(
         "voiceJoin",
-        async (roomId, callback) => {
+        (roomId) => {
 
-            try {
+            if (!roomId) return;
 
-                if (!roomId) {
+            socket.join(
+                `voice:${roomId}`
+            );
 
-                    if (callback) {
-                        callback({
-                            success: false,
-                            error: "Voice room required"
-                        });
-                    }
+            socket.to(
+                `voice:${roomId}`
+            ).emit(
+                "voiceUserJoined",
+                {
+                    userId:
+                        user._id.toString(),
 
-                    return;
+                    username:
+                        user.username
                 }
-
-                /*
-                 * Only allow voice rooms for channels
-                 * the user actually belongs to.
-                 */
-
-                if (validObjectId(roomId)) {
-
-                    const channel =
-                        await Channel.findOne({
-
-                            _id: roomId,
-
-                            members: user._id
-
-                        });
-
-                    if (!channel) {
-
-                        if (callback) {
-                            callback({
-                                success: false,
-                                error:
-                                    "You are not a member of this channel"
-                            });
-                        }
-
-                        return;
-                    }
-
-                }
-
-                socket.join(
-                    `voice:${roomId}`
-                );
-
-                socket.currentVoiceRoom =
-                    roomId;
-
-                socket.to(
-                    `voice:${roomId}`
-                )
-                .emit(
-                    "voiceUserJoined",
-                    {
-                        userId:
-                            user._id.toString(),
-
-                        username:
-                            user.username,
-
-                        avatar:
-                            user.avatar
-                    }
-                );
-
-                if (callback) {
-
-                    callback({
-                        success: true
-                    });
-
-                }
-
-            } catch (error) {
-
-                console.error(
-                    "Voice join error:",
-                    error
-                );
-
-                if (callback) {
-
-                    callback({
-                        success: false,
-                        error: "Could not join voice"
-                    });
-
-                }
-
-            }
+            );
 
         }
     );
@@ -1719,23 +1391,16 @@ io.on("connection", async (socket) => {
         "voiceSignal",
         (data) => {
 
-            if (!data?.roomId) {
-                return;
-            }
+            if (!data?.roomId) return;
 
             socket.to(
                 `voice:${data.roomId}`
-            )
-            .emit(
+            ).emit(
                 "voiceSignal",
                 {
                     from: socket.id,
 
-                    userId:
-                        user._id.toString(),
-
-                    signal:
-                        data.signal
+                    signal: data.signal
                 }
             );
 
@@ -1750,9 +1415,7 @@ io.on("connection", async (socket) => {
         "voiceLeave",
         (roomId) => {
 
-            if (!roomId) {
-                return;
-            }
+            if (!roomId) return;
 
             socket.leave(
                 `voice:${roomId}`
@@ -1760,23 +1423,13 @@ io.on("connection", async (socket) => {
 
             socket.to(
                 `voice:${roomId}`
-            )
-            .emit(
+            ).emit(
                 "voiceUserLeft",
                 {
                     userId:
                         user._id.toString()
                 }
             );
-
-            if (
-                socket.currentVoiceRoom ===
-                roomId
-            ) {
-
-                socket.currentVoiceRoom = null;
-
-            }
 
         }
     );
@@ -1789,11 +1442,11 @@ io.on("connection", async (socket) => {
         "disconnect",
         async () => {
 
-            try {
+            console.log(
+                `🔴 ${user.username} disconnected`
+            );
 
-                console.log(
-                    `🔴 ${user.username} disconnected`
-                );
+            try {
 
                 user.status = "offline";
 
@@ -1816,6 +1469,9 @@ io.on("connection", async (socket) => {
 /* =====================================================
    SERVER
 ===================================================== */
+
+const PORT =
+    process.env.PORT || 3000;
 
 server.listen(
     PORT,
